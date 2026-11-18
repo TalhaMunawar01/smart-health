@@ -1,6 +1,6 @@
-# SmartHealth ERD (step 1, revision 4)
+# SmartHealth ERD (step 1, revision 5)
 
-_Data model for the SmartHealth assignment (Part A). Step 1, revision 4: core tables, relationships, record status, roles and traceability columns. Business columns, constraints and the audit/event tables follow in steps 2 and 3._
+_Data model for the SmartHealth assignment (Part A). Step 1, revision 5: core tables, relationships, record status, roles and traceability columns. Business columns, constraints and the audit/event tables follow in steps 2 and 3._
 
 MediNova · SmartHealth Part A · ERD step 1
 
@@ -36,13 +36,16 @@ Read each line as a sentence in both directions. `patient` books `appointment`: 
 
 ### What changed in this version
 
-Revision 4 · 22 tables · 34 relationships
+Revision 5 · 22 tables · 34 relationships · 10 new columns
 
-- **No separate login email:** `user.login_email` is removed. People sign in with the `email` already on their user row and their password.
-- **Email uniqueness:** `email` is unique among users who can sign in (those with a `password_hash`). Patients registered at the front desk without a password can still share an email, for example a parent and child.
-- **Who can sign in:** a user with both an `email` and a `password_hash`. The database rejects a password without an email.
-- **Revision 3, for reference:** one super admin and no branch admins; roles apply to the whole hospital (`user_role.branch_id` removed); one user can hold several roles, such as provider and front desk.
-- **Revision 2, for reference:** first and last name, record `status` instead of `is_deleted`, hard delete for `provider_schedule` and `role_permission`, one schedule row per day, `joined_at` and `left_at`, and the role switcher.
+- **branch:** `address` (same shape as `user.address`) and `phone`, the branch's contact number.
+- **user:** `national_id`, optional and unique when set. Registration checks it first to catch duplicate patients.
+- **patient:** `blood_group`, empty when unknown.
+- **provider:** `qualifications` (for example MBBS, FCPS) and `bio` for the doctor's profile.
+- **speciality:** `description` of what it treats, so patients and the Part B assistant can find the right specialist.
+- **appointment:** `reason`, why the patient is coming.
+- **visit:** `follow_up_date`, set by the doctor; follow-up reminders are scheduled from it.
+- **Earlier revisions:** revision 4 removed the separate login email (people sign in with `email`); revision 3 brought one super admin and hospital-wide roles; revision 2 added record `status`, per-day schedules, hard delete for two tables, first and last name, and the role switcher.
 
 ### Overview
 
@@ -125,6 +128,8 @@ erDiagram
     uuid hospital_id FK
     varchar name
     varchar timezone
+    jsonb address "same shape as user.address"
+    varchar phone "branch contact number"
     enum status "ACTIVE, DEACTIVATED, DELETED"
     timestamptz created_at
     uuid created_by FK
@@ -148,6 +153,7 @@ erDiagram
     varchar last_name
     enum gender
     date dob
+    varchar national_id UK "e.g. CNIC, optional, unique when set"
     varchar phone "not unique"
     varchar email "contact and sign-in email, unique among users who can sign in"
     jsonb address
@@ -177,6 +183,7 @@ erDiagram
     uuid id PK
     uuid user_id FK "required, unique"
     varchar mrn UK "medical record number"
+    enum blood_group "A+, A-, B+, B-, AB+, AB-, O+, O-; empty = unknown"
     enum status "ACTIVE, DEACTIVATED, DELETED"
     timestamptz created_at
     uuid created_by FK "registered by"
@@ -188,6 +195,8 @@ erDiagram
     uuid user_id FK "required, unique"
     varchar license_no UK
     varchar title
+    varchar qualifications "e.g. MBBS, FCPS"
+    text bio "shown on the doctor's profile"
     numeric consultation_fee "set by the super admin"
     enum status "ACTIVE, DEACTIVATED, DELETED"
     timestamptz created_at
@@ -198,6 +207,7 @@ erDiagram
   speciality {
     uuid id PK
     varchar name UK
+    text description "what it treats"
     enum status "ACTIVE, DEACTIVATED, DELETED"
     timestamptz created_at
     uuid created_by FK
@@ -329,6 +339,7 @@ erDiagram
     uuid provider_schedule_id FK "shift it was booked in, empty if deleted"
     timestamptz start_at
     timestamptz end_at "start plus slot length"
+    text reason "why the patient is coming, optional"
     enum status "PENDING, CONFIRMED, CANCELLED..."
     uuid rescheduled_from_id FK "the appointment it replaced"
     timestamptz created_at "booking time"
@@ -345,6 +356,7 @@ erDiagram
     int token_no "queue number for the day"
     enum status "WAITING, IN_PROGRESS, COMPLETED..."
     text doctor_notes "history, findings, referrals"
+    date follow_up_date "set by the doctor, empty = no follow-up"
     timestamptz checked_in_at
     uuid checked_in_by FK
     timestamptz started_at
@@ -450,10 +462,10 @@ Everyone in the system is one `user` row with their first and last name, date of
 
 | Table | Holds | Who has one |
 |---|---|---|
-| user | First and last name, gender, date of birth, phone, email, address; plus a password for people who sign in with that email | Everyone: patients, doctors and staff |
+| user | First and last name, gender, date of birth, national ID, phone, email, address; plus a password for people who sign in with that email | Everyone: patients, doctors and staff |
 | staff | Employee number, designation, employment type, joining and leaving dates | Every employee, doctors included |
-| patient | Medical record number, and later medical details | Patients |
-| provider | License, title, consultation fee, plus specialities and schedules | Doctors |
+| patient | Medical record number and blood group; more medical details later | Patients |
+| provider | License, title, qualifications, bio, consultation fee, plus specialities and schedules | Doctors |
 | user_role | One role the user holds; a user can have several | Every user who signs in |
 
 #### How each kind of person is stored
@@ -471,12 +483,13 @@ Everyone in the system is one `user` row with their first and last name, date of
 
 #### Rules
 
+- `national_id` (for example a CNIC) is optional and unique when set, so two people can't share one.
 - One `user` row per human. A doctor who is also a patient has one phone number and one address, shared by both records.
 - People sign in with their `email` and password; there is no separate login email. A user can sign in only when `email` and `password_hash` are both set, and the database rejects a password without an email.
 - `email` is unique among users who can sign in. A sign-up or a new password is refused if another user who can sign in already uses that email.
 - `password_hash` is read only by the sign-in code and is never returned by any API, screen or report.
 - Only users who can sign in get roles. A provider must be able to sign in; this is checked when the provider is created.
-- Phone isn't unique, and neither is email for people who don't sign in, so family members registered at the front desk can share them. Only one person per email can sign in. Duplicate patients are caught at registration by matching name, date of birth and phone.
+- Phone isn't unique, and neither is email for people who don't sign in, so family members registered at the front desk can share them. Only one person per email can sign in. Duplicate patients are caught at registration by national ID when it's given, and otherwise by matching name, date of birth and phone.
 - If a patient registered at the front desk signs up later, a password is added to their existing user row, matched by phone or medical record number, instead of creating a second one. Their email is filled in or confirmed at the same time, and must not already be used by someone who signs in.
 - Every employee, doctors included, has one `staff` row with a unique employee number. A doctor's staff row holds their employment details; their provider row holds the clinical ones.
 - `designation` is a label, such as Senior Lab Technician. What someone can do comes only from their roles.
@@ -560,7 +573,7 @@ Every patient the doctor sees has a visit. Booked patients get one when they che
 - The front desk finds the patient, or registers them: a `user` row without a login, and a `patient` row.
 - The front desk creates a visit for a chosen doctor and department, with the next token number. Status is waiting.
 - The doctor sees booked patients first, then walk-ins in token order.
-- The doctor writes `doctor_notes` (history, findings), refers any services, and completes the visit.
+- The doctor writes `doctor_notes` (history, findings), refers any services, sets a `follow_up_date` if the patient should come back, and completes the visit.
 
 #### Rules
 
@@ -725,7 +738,7 @@ New rows start as ACTIVE · a DEACTIVATED row can be made ACTIVE again · DELETE
 - A cancelled or rescheduled appointment can't be changed afterwards, so its `updated_by` and `updated_at` stay as who cancelled or moved it, and when.
 - A row with status `DELETED` stays in its table and is hidden from normal queries. A `DEACTIVATED` row still shows in admin lists but can't be used for new work. Anything that pointed at either still works, so past visits keep their branch, department, doctor and services.
 - `provider_schedule` and `role_permission` rows are deleted outright. Appointments booked in a deleted schedule row keep their own times.
-- Unique values (the email of a user who can sign in, employee number, medical record number, license number, a role's code, a service code within a hospital) are unique only among rows whose status isn't `DELETED`. Phone isn't unique at all.
+- Unique values (the email of a user who can sign in, national ID, employee number, medical record number, license number, a role's code, a service code within a hospital) are unique only among rows whose status isn't `DELETED`. Phone isn't unique at all.
 - Appointments, visits, referred services, invoices, invoice lines and notifications are never deleted. They change status instead; their `status` column is their workflow state, such as `CONFIRMED`, not a record status.
 - These columns hold the latest change only. The audit log in step 3 keeps every change, with values before and after.
 
@@ -790,7 +803,7 @@ Every line in the overview, written as a plain rule.
 | Notifications |  |  |
 | patient → notification | 1 to many | A patient receives many notifications, sent to the contact details on their user row. |
 | appointment → notification | 0/1 to many | Confirmations, reminders and cancellations are about an appointment. |
-| visit → notification | 0/1 to many | Follow-up reminders are about a visit, which also covers walk-ins. |
+| visit → notification | 0/1 to many | Follow-up reminders are about a visit, which also covers walk-ins, and are scheduled from its `follow_up_date`. |
 
 ### Decisions and next steps
 
@@ -811,7 +824,8 @@ What step 1 locks, and what comes next
 - The super admin enters schedules and time off
 - Appointments hit by time off are listed for the front desk to reschedule, not cancelled; the list is calculated, not stored
 - Walk-ins are visits without an appointment, for a chosen doctor, seen after booked patients
-- Doctor's notes are stored on the visit
+- Doctor's notes and the follow-up date are stored on the visit; the patient's reason for coming is stored on the appointment
+- Branches have an address and a phone number; doctors have qualifications and a bio; specialities have a description
 - Invoice per visit: doctor's fee plus the services the patient took, issued at checkout
 - Doctor fees and service prices are set per hospital by the super admin
 - Five built-in roles: super admin (exactly one person, runs every admin setting), front desk, provider, lab technician and patient. There are no branch admins. The super admin manages roles; permissions are fixed in code
